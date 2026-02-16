@@ -97,13 +97,7 @@ pub async fn chat_completions(
 
     let (model, prompt, session_id) = openai_to_cli::openai_to_cli(&request);
 
-    info!(
-        req = %request_id,
-        model = %model,
-        streaming = %is_streaming,
-        api = "openai",
-        "request"
-    );
+    info!("[req={request_id}] OpenAI chat completions model={model} streaming={is_streaming}");
 
     let options = SubprocessOptions {
         request_id: request_id.clone(),
@@ -113,15 +107,14 @@ pub async fn chat_completions(
     };
 
     if is_streaming {
-        // Streaming: SSE response is returned immediately; subprocess lifecycle is logged separately
         handle_streaming(request_id, prompt, options).await
     } else {
         let start = Instant::now();
         let result = handle_non_streaming(request_id.clone(), prompt, options).await;
         let elapsed = start.elapsed().as_secs_f64();
         match &result {
-            Ok(_) => info!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "openai", "request complete"),
-            Err(e) => error!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "openai", error = %e, "request failed"),
+            Ok(_) => info!("[req={request_id}] Request complete after {elapsed:.2}s"),
+            Err(e) => error!("[req={request_id}] Request failed after {elapsed:.2}s: {e}"),
         }
         result
     }
@@ -221,7 +214,7 @@ async fn handle_streaming(
                             }
                         }
                         Err(e) => {
-                            error!("Failed to serialize chunk: {}", e);
+                            error!("[req={req_id}] Failed to serialize chunk: {e}");
                         }
                     }
                 }
@@ -310,13 +303,7 @@ pub async fn messages(
 
     let (model, prompt, session_id) = anthropic_to_cli::anthropic_to_cli(&request);
 
-    info!(
-        req = %request_id,
-        model = %model,
-        streaming = %is_streaming,
-        api = "anthropic",
-        "request"
-    );
+    info!("[req={request_id}] Anthropic messages model={model} streaming={is_streaming}");
 
     let options = SubprocessOptions {
         request_id: request_id.clone(),
@@ -332,8 +319,8 @@ pub async fn messages(
         let result = handle_messages_non_streaming(request_id.clone(), prompt, options).await;
         let elapsed = start.elapsed().as_secs_f64();
         match &result {
-            Ok(_) => info!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "anthropic", "request complete"),
-            Err(e) => error!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "anthropic", error = %e, "request failed"),
+            Ok(_) => info!("[req={request_id}] Request complete after {elapsed:.2}s"),
+            Err(e) => error!("[req={request_id}] Request failed after {elapsed:.2}s: {e}"),
         }
         result
     }
