@@ -109,3 +109,182 @@ pub fn openai_to_cli(request: &ChatCompletionRequest) -> (&'static str, String, 
 
     (model, prompt, session_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::openai::ContentPart;
+
+    // ── extract_model ─────────────────────────────────────────
+
+    #[test]
+    fn exact_model_names() {
+        assert_eq!(extract_model("claude-opus-4"), "opus");
+        assert_eq!(extract_model("claude-sonnet-4"), "sonnet");
+        assert_eq!(extract_model("claude-haiku-4"), "haiku");
+    }
+
+    #[test]
+    fn short_aliases() {
+        assert_eq!(extract_model("opus"), "opus");
+        assert_eq!(extract_model("sonnet"), "sonnet");
+        assert_eq!(extract_model("haiku"), "haiku");
+    }
+
+    #[test]
+    fn prefixed_model_names() {
+        assert_eq!(extract_model("claude-code-cli/claude-opus-4"), "opus");
+        assert_eq!(extract_model("claude-code-cli/claude-sonnet-4"), "sonnet");
+        assert_eq!(extract_model("claude-code-cli/claude-haiku-4"), "haiku");
+    }
+
+    #[test]
+    fn date_suffixed_model_names() {
+        assert_eq!(extract_model("claude-opus-4-20250514"), "opus");
+        assert_eq!(extract_model("claude-sonnet-4-5-20250929"), "sonnet");
+        assert_eq!(extract_model("claude-haiku-4-5-20251001"), "haiku");
+    }
+
+    #[test]
+    fn unknown_model_defaults_to_opus() {
+        assert_eq!(extract_model("gpt-4"), "opus");
+        assert_eq!(extract_model("unknown-model"), "opus");
+        assert_eq!(extract_model(""), "opus");
+    }
+
+    // ── messages_to_prompt ────────────────────────────────────
+
+    #[test]
+    fn single_user_message() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: Some(MessageContent::Text("Hello".to_string())),
+        }];
+        assert_eq!(messages_to_prompt(&messages), "Hello");
+    }
+
+    #[test]
+    fn system_message_wrapped_in_tags() {
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: Some(MessageContent::Text("You are helpful.".to_string())),
+            },
+            Message {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("Hi".to_string())),
+            },
+        ];
+        let prompt = messages_to_prompt(&messages);
+        assert!(prompt.starts_with("<system>\nYou are helpful.\n</system>"));
+        assert!(prompt.contains("Hi"));
+    }
+
+    #[test]
+    fn assistant_message_wrapped_in_previous_response() {
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("Hi".to_string())),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: Some(MessageContent::Text("Hello!".to_string())),
+            },
+            Message {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("How are you?".to_string())),
+            },
+        ];
+        let prompt = messages_to_prompt(&messages);
+        assert!(prompt.contains("<previous_response>\nHello!\n</previous_response>"));
+        assert!(prompt.contains("How are you?"));
+    }
+
+    #[test]
+    fn multipart_content() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: Some(MessageContent::Parts(vec![
+                ContentPart {
+                    part_type: "text".to_string(),
+                    text: Some("Hello ".to_string()),
+                },
+                ContentPart {
+                    part_type: "text".to_string(),
+                    text: Some("world".to_string()),
+                },
+                ContentPart {
+                    part_type: "image_url".to_string(),
+                    text: None,
+                },
+            ])),
+        }];
+        assert_eq!(messages_to_prompt(&messages), "Hello world");
+    }
+
+    #[test]
+    fn none_content_produces_empty_string() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: None,
+        }];
+        assert_eq!(messages_to_prompt(&messages), "");
+    }
+
+    #[test]
+    fn unknown_role_treated_as_user() {
+        let messages = vec![Message {
+            role: "tool".to_string(),
+            content: Some(MessageContent::Text("tool output".to_string())),
+        }];
+        assert_eq!(messages_to_prompt(&messages), "tool output");
+    }
+
+    // ── openai_to_cli ────────────────────────────────────────
+
+    #[test]
+    fn openai_to_cli_extracts_all_fields() {
+        let request = ChatCompletionRequest {
+            model: Some("claude-sonnet-4".to_string()),
+            messages: Some(vec![Message {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("test".to_string())),
+            }]),
+            stream: false,
+            user: Some("session-123".to_string()),
+        };
+        let (model, prompt, session_id) = openai_to_cli(&request);
+        assert_eq!(model, "sonnet");
+        assert_eq!(prompt, "test");
+        assert_eq!(session_id, Some("session-123".to_string()));
+    }
+
+    #[test]
+    fn openai_to_cli_defaults_no_model() {
+        let request = ChatCompletionRequest {
+            model: None,
+            messages: Some(vec![Message {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text("test".to_string())),
+            }]),
+            stream: false,
+            user: None,
+        };
+        let (model, _, session_id) = openai_to_cli(&request);
+        assert_eq!(model, "opus");
+        assert_eq!(session_id, None);
+    }
+
+    #[test]
+    fn openai_to_cli_no_messages() {
+        let request = ChatCompletionRequest {
+            model: Some("opus".to_string()),
+            messages: None,
+            stream: false,
+            user: None,
+        };
+        let (_, prompt, _) = openai_to_cli(&request);
+        assert_eq!(prompt, "");
+    }
+}

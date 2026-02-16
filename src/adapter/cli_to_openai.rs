@@ -115,3 +115,130 @@ pub fn create_done_chunk(request_id: &str, model: &str) -> ChatCompletionChunk {
         }],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::claude_cli::{ModelUsage, ResultMessage};
+    use std::collections::HashMap;
+
+    // ── normalize_model_name ──────────────────────────────────
+
+    #[test]
+    fn normalize_opus() {
+        assert_eq!(normalize_model_name("claude-opus-4-20250514"), "claude-opus-4");
+        assert_eq!(normalize_model_name("opus"), "claude-opus-4");
+    }
+
+    #[test]
+    fn normalize_sonnet() {
+        assert_eq!(normalize_model_name("claude-sonnet-4-5-20250929"), "claude-sonnet-4");
+        assert_eq!(normalize_model_name("sonnet"), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn normalize_haiku() {
+        assert_eq!(normalize_model_name("claude-haiku-4-5-20251001"), "claude-haiku-4");
+        assert_eq!(normalize_model_name("haiku"), "claude-haiku-4");
+    }
+
+    #[test]
+    fn normalize_unknown_defaults_sonnet() {
+        assert_eq!(normalize_model_name("gpt-4"), "claude-sonnet-4");
+        assert_eq!(normalize_model_name(""), "claude-sonnet-4");
+    }
+
+    // ── cli_result_to_openai ─────────────────────────────────
+
+    #[test]
+    fn result_to_openai_basic() {
+        let result = ResultMessage {
+            result: Some("Hello world".to_string()),
+            exit_code: Some(0),
+            duration_ms: Some(1000),
+            duration_api_ms: Some(800),
+            num_turns: Some(1),
+            model_usage: None,
+        };
+        let resp = cli_result_to_openai(&result, "abc123");
+        assert_eq!(resp.id, "chatcmpl-abc123");
+        assert_eq!(resp.object, "chat.completion");
+        assert_eq!(resp.choices.len(), 1);
+        assert_eq!(resp.choices[0].message.role, "assistant");
+        assert_eq!(resp.choices[0].message.content, "Hello world");
+        assert_eq!(resp.choices[0].finish_reason, "stop");
+        assert!(resp.usage.is_none());
+    }
+
+    #[test]
+    fn result_to_openai_with_usage() {
+        let mut usage = HashMap::new();
+        usage.insert(
+            "claude-opus-4-20250514".to_string(),
+            ModelUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                cache_read_tokens: Some(10),
+                cache_write_tokens: Some(5),
+            },
+        );
+        let result = ResultMessage {
+            result: Some("test".to_string()),
+            exit_code: Some(0),
+            duration_ms: None,
+            duration_api_ms: None,
+            num_turns: None,
+            model_usage: Some(usage),
+        };
+        let resp = cli_result_to_openai(&result, "xyz");
+        assert_eq!(resp.model, "claude-opus-4");
+        let u = resp.usage.unwrap();
+        assert_eq!(u.prompt_tokens, 100);
+        assert_eq!(u.completion_tokens, 50);
+        assert_eq!(u.total_tokens, 150);
+    }
+
+    #[test]
+    fn result_to_openai_empty_result() {
+        let result = ResultMessage {
+            result: None,
+            exit_code: Some(0),
+            duration_ms: None,
+            duration_api_ms: None,
+            num_turns: None,
+            model_usage: None,
+        };
+        let resp = cli_result_to_openai(&result, "id");
+        assert_eq!(resp.choices[0].message.content, "");
+    }
+
+    // ── create_stream_chunk ──────────────────────────────────
+
+    #[test]
+    fn stream_chunk_first() {
+        let chunk = create_stream_chunk("req1", "claude-sonnet-4", "Hello", true);
+        assert_eq!(chunk.id, "chatcmpl-req1");
+        assert_eq!(chunk.object, "chat.completion.chunk");
+        assert_eq!(chunk.choices[0].delta.role, Some("assistant".to_string()));
+        assert_eq!(chunk.choices[0].delta.content, Some("Hello".to_string()));
+        assert_eq!(chunk.choices[0].finish_reason, None);
+    }
+
+    #[test]
+    fn stream_chunk_subsequent() {
+        let chunk = create_stream_chunk("req1", "claude-sonnet-4", "world", false);
+        assert_eq!(chunk.choices[0].delta.role, None);
+        assert_eq!(chunk.choices[0].delta.content, Some("world".to_string()));
+    }
+
+    // ── create_done_chunk ────────────────────────────────────
+
+    #[test]
+    fn done_chunk() {
+        let chunk = create_done_chunk("req1", "claude-opus-4-20250514");
+        assert_eq!(chunk.model, "claude-opus-4");
+        assert_eq!(chunk.choices[0].finish_reason, Some("stop".to_string()));
+        assert_eq!(chunk.choices[0].delta.content, None);
+        assert_eq!(chunk.choices[0].delta.role, None);
+    }
+}

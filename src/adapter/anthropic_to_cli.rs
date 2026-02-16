@@ -55,3 +55,151 @@ pub fn anthropic_to_cli(request: &MessagesRequest) -> (&'static str, String, Opt
 
     (model, prompt, session_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::anthropic::{ContentBlockInput, MessageInput, RequestMetadata};
+
+    // ── extract_text ──────────────────────────────────────────
+
+    #[test]
+    fn extract_text_from_string() {
+        let content = ContentInput::Text("hello".to_string());
+        assert_eq!(extract_text(&content), "hello");
+    }
+
+    #[test]
+    fn extract_text_from_blocks() {
+        let content = ContentInput::Blocks(vec![
+            ContentBlockInput {
+                block_type: "text".to_string(),
+                text: Some("hello ".to_string()),
+            },
+            ContentBlockInput {
+                block_type: "image".to_string(),
+                text: None,
+            },
+            ContentBlockInput {
+                block_type: "text".to_string(),
+                text: Some("world".to_string()),
+            },
+        ]);
+        assert_eq!(extract_text(&content), "hello world");
+    }
+
+    #[test]
+    fn extract_text_empty_blocks() {
+        let content = ContentInput::Blocks(vec![]);
+        assert_eq!(extract_text(&content), "");
+    }
+
+    // ── messages_to_prompt ────────────────────────────────────
+
+    #[test]
+    fn system_at_top() {
+        let system = ContentInput::Text("Be helpful.".to_string());
+        let messages = vec![MessageInput {
+            role: "user".to_string(),
+            content: ContentInput::Text("Hi".to_string()),
+        }];
+        let prompt = messages_to_prompt(Some(&system), &messages);
+        assert!(prompt.starts_with("<system>\nBe helpful.\n</system>"));
+        assert!(prompt.contains("Hi"));
+    }
+
+    #[test]
+    fn no_system() {
+        let messages = vec![MessageInput {
+            role: "user".to_string(),
+            content: ContentInput::Text("Hi".to_string()),
+        }];
+        let prompt = messages_to_prompt(None, &messages);
+        assert_eq!(prompt, "Hi");
+    }
+
+    #[test]
+    fn empty_system_omitted() {
+        let system = ContentInput::Text("".to_string());
+        let messages = vec![MessageInput {
+            role: "user".to_string(),
+            content: ContentInput::Text("Hi".to_string()),
+        }];
+        let prompt = messages_to_prompt(Some(&system), &messages);
+        assert!(!prompt.contains("<system>"));
+        assert_eq!(prompt, "Hi");
+    }
+
+    #[test]
+    fn assistant_wrapped() {
+        let messages = vec![
+            MessageInput {
+                role: "user".to_string(),
+                content: ContentInput::Text("Hi".to_string()),
+            },
+            MessageInput {
+                role: "assistant".to_string(),
+                content: ContentInput::Text("Hello!".to_string()),
+            },
+            MessageInput {
+                role: "user".to_string(),
+                content: ContentInput::Text("How?".to_string()),
+            },
+        ];
+        let prompt = messages_to_prompt(None, &messages);
+        assert!(prompt.contains("<previous_response>\nHello!\n</previous_response>"));
+    }
+
+    #[test]
+    fn unknown_role_as_user() {
+        let messages = vec![MessageInput {
+            role: "tool".to_string(),
+            content: ContentInput::Text("result".to_string()),
+        }];
+        let prompt = messages_to_prompt(None, &messages);
+        assert_eq!(prompt, "result");
+    }
+
+    // ── anthropic_to_cli ─────────────────────────────────────
+
+    #[test]
+    fn anthropic_to_cli_full() {
+        let request = MessagesRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            max_tokens: 100,
+            messages: vec![MessageInput {
+                role: "user".to_string(),
+                content: ContentInput::Text("test".to_string()),
+            }],
+            stream: false,
+            system: Some(ContentInput::Text("system prompt".to_string())),
+            metadata: Some(RequestMetadata {
+                user_id: Some("user-42".to_string()),
+            }),
+        };
+        let (model, prompt, session_id) = anthropic_to_cli(&request);
+        assert_eq!(model, "sonnet");
+        assert!(prompt.contains("<system>"));
+        assert!(prompt.contains("test"));
+        assert_eq!(session_id, Some("user-42".to_string()));
+    }
+
+    #[test]
+    fn anthropic_to_cli_minimal() {
+        let request = MessagesRequest {
+            model: "opus".to_string(),
+            max_tokens: 50,
+            messages: vec![MessageInput {
+                role: "user".to_string(),
+                content: ContentInput::Text("hi".to_string()),
+            }],
+            stream: true,
+            system: None,
+            metadata: None,
+        };
+        let (model, prompt, session_id) = anthropic_to_cli(&request);
+        assert_eq!(model, "opus");
+        assert_eq!(prompt, "hi");
+        assert_eq!(session_id, None);
+    }
+}

@@ -275,3 +275,170 @@ fn process_stream_event(event: StreamEvent) -> Vec<SubprocessEvent> {
         _ => vec![],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_args ────────────────────────────────────────────
+
+    #[test]
+    fn build_args_basic() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "opus".to_string(),
+            session_id: None,
+            cwd: "/tmp".to_string(),
+            api: "anthropic",
+        };
+        let args = build_args("Hello world", &options);
+        assert!(args.contains(&"--print".to_string()));
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"opus".to_string()));
+        assert!(args.contains(&"--permission-mode".to_string()));
+        assert!(args.contains(&"bypassPermissions".to_string()));
+        assert!(args.contains(&"Hello world".to_string()));
+        assert!(!args.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_session_id() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "sonnet".to_string(),
+            session_id: Some("sess-123".to_string()),
+            cwd: "/tmp".to_string(),
+            api: "openai",
+        };
+        let args = build_args("test", &options);
+        assert!(args.contains(&"--session-id".to_string()));
+        assert!(args.contains(&"sess-123".to_string()));
+    }
+
+    // ── process_line ──────────────────────────────────────────
+
+    #[test]
+    fn process_line_system_message() {
+        let line = r#"{"type":"system","subtype":"init"}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_assistant_with_model() {
+        let line = r#"{"type":"assistant","message":{"model":"claude-opus-4-20250514","content":[]}}"#;
+        let events = process_line(line).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SubprocessEvent::Model(m) => assert_eq!(m, "claude-opus-4-20250514"),
+            other => panic!("Expected Model event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn process_line_assistant_with_content() {
+        let line = r#"{"type":"assistant","message":{"model":"claude-sonnet-4","content":[{"type":"text","text":"Hello"}]}}"#;
+        let events = process_line(line).unwrap();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            SubprocessEvent::Model(m) => assert_eq!(m, "claude-sonnet-4"),
+            other => panic!("Expected Model, got {:?}", other),
+        }
+        match &events[1] {
+            SubprocessEvent::ContentDelta(t) => assert_eq!(t, "Hello"),
+            other => panic!("Expected ContentDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn process_line_assistant_empty_content_skipped() {
+        let line = r#"{"type":"assistant","message":{"model":"opus","content":[{"type":"text","text":""}]}}"#;
+        let events = process_line(line).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], SubprocessEvent::Model(_)));
+    }
+
+    #[test]
+    fn process_line_result() {
+        let line = r#"{"type":"result","result":"Done","exitCode":0,"duration_ms":1234,"duration_api_ms":1000,"num_turns":1,"modelUsage":{"claude-opus-4":{"input_tokens":50,"output_tokens":25}}}"#;
+        let events = process_line(line).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SubprocessEvent::Result(r) => {
+                assert_eq!(r.result, Some("Done".to_string()));
+                assert_eq!(r.exit_code, Some(0));
+                assert_eq!(r.duration_ms, Some(1234));
+                let usage = r.model_usage.as_ref().unwrap();
+                assert_eq!(usage["claude-opus-4"].input_tokens, Some(50));
+                assert_eq!(usage["claude-opus-4"].output_tokens, Some(25));
+            }
+            other => panic!("Expected Result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn process_line_content_block_delta() {
+        let line = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"streaming text"}}"#;
+        let events = process_line(line).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SubprocessEvent::ContentDelta(t) => assert_eq!(t, "streaming text"),
+            other => panic!("Expected ContentDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn process_line_content_block_delta_empty_text() {
+        let line = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_content_block_start() {
+        let line = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_content_block_stop() {
+        let line = r#"{"type":"content_block_stop","index":0}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_message_start() {
+        let line = r#"{"type":"message_start"}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_message_delta() {
+        let line = r#"{"type":"message_delta"}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_message_stop() {
+        let line = r#"{"type":"message_stop"}"#;
+        let events = process_line(line).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn process_line_not_json() {
+        assert!(process_line("not json at all").is_none());
+        assert!(process_line("").is_none());
+    }
+
+    #[test]
+    fn process_line_unknown_json() {
+        assert!(process_line(r#"{"type":"unknown","data":123}"#).is_none());
+    }
+}

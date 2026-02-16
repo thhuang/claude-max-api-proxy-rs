@@ -155,4 +155,153 @@ impl SessionManager {
             }
         });
     }
+
+    /// Create a SessionManager with a custom file path (for testing).
+    #[cfg(test)]
+    fn with_path(file_path: PathBuf) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            file_path,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_path() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("session-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("sessions.json")
+    }
+
+    #[tokio::test]
+    async fn get_or_create_new_session() {
+        let mgr = SessionManager::with_path(temp_path());
+        let id = mgr.get_or_create("client-1", "opus").await;
+        assert!(!id.is_empty());
+        // UUID format
+        assert_eq!(id.len(), 36);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_returns_same_session() {
+        let mgr = SessionManager::with_path(temp_path());
+        let id1 = mgr.get_or_create("client-1", "opus").await;
+        let id2 = mgr.get_or_create("client-1", "sonnet").await;
+        assert_eq!(id1, id2);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_different_clients() {
+        let mgr = SessionManager::with_path(temp_path());
+        let id1 = mgr.get_or_create("client-1", "opus").await;
+        let id2 = mgr.get_or_create("client-2", "opus").await;
+        assert_ne!(id1, id2);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_updates_model() {
+        let mgr = SessionManager::with_path(temp_path());
+        mgr.get_or_create("client-1", "opus").await;
+        mgr.get_or_create("client-1", "sonnet").await;
+
+        let sessions = mgr.sessions.read().await;
+        assert_eq!(sessions["client-1"].model, "sonnet");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_updates_last_used() {
+        let mgr = SessionManager::with_path(temp_path());
+        mgr.get_or_create("client-1", "opus").await;
+        let t1 = {
+            let sessions = mgr.sessions.read().await;
+            sessions["client-1"].last_used_at
+        };
+
+        // Small sleep to ensure timestamp changes
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+        mgr.get_or_create("client-1", "opus").await;
+        let t2 = {
+            let sessions = mgr.sessions.read().await;
+            sessions["client-1"].last_used_at
+        };
+
+        assert!(t2 >= t1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_expired() {
+        let mgr = SessionManager::with_path(temp_path());
+
+        // Manually insert an expired session
+        {
+            let mut sessions = mgr.sessions.write().await;
+            sessions.insert(
+                "old-client".to_string(),
+                SessionMapping {
+                    clawdbot_id: "old-client".to_string(),
+                    claude_session_id: "old-session".to_string(),
+                    created_at: 0,
+                    last_used_at: 0, // epoch — definitely expired
+                    model: "opus".to_string(),
+                },
+            );
+            sessions.insert(
+                "new-client".to_string(),
+                SessionMapping {
+                    clawdbot_id: "new-client".to_string(),
+                    claude_session_id: "new-session".to_string(),
+                    created_at: now_ms(),
+                    last_used_at: now_ms(),
+                    model: "opus".to_string(),
+                },
+            );
+        }
+
+        mgr.cleanup_expired().await;
+
+        let sessions = mgr.sessions.read().await;
+        assert!(!sessions.contains_key("old-client"));
+        assert!(sessions.contains_key("new-client"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_no_op_when_all_fresh() {
+        let mgr = SessionManager::with_path(temp_path());
+        mgr.get_or_create("client-1", "opus").await;
+        mgr.cleanup_expired().await;
+
+        let sessions = mgr.sessions.read().await;
+        assert!(sessions.contains_key("client-1"));
+    }
+
+    #[tokio::test]
+    async fn save_and_load_round_trip() {
+        let path = temp_path();
+        let mgr = SessionManager::with_path(path.clone());
+        mgr.get_or_create("client-1", "opus").await;
+
+        // Wait for the fire-and-forget save
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Load into a new manager
+        let mgr2 = SessionManager::with_path(path);
+        mgr2.load().await;
+
+        let sessions = mgr2.sessions.read().await;
+        assert!(sessions.contains_key("client-1"));
+        assert_eq!(sessions["client-1"].model, "opus");
+    }
+
+    #[tokio::test]
+    async fn load_missing_file_is_ok() {
+        let mgr = SessionManager::with_path(PathBuf::from("/tmp/nonexistent-session-file.json"));
+        mgr.load().await;
+        let sessions = mgr.sessions.read().await;
+        assert!(sessions.is_empty());
+    }
 }
