@@ -216,9 +216,11 @@ src/
 |----------|---------|-------------|
 | `RUST_LOG` | `claude_max_api=info` | Log level filter ([tracing env-filter syntax](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)) |
 
-## Comparison with Node.js Version
+## Acknowledgements
 
-This is a Rust rewrite of [claude-max-api-proxy](https://github.com/anthropics/claude-code-cli-provider) with additional features:
+This project is inspired by [claude-max-api-proxy](https://docs.openclaw.ai/providers/claude-max-api-proxy), the Node.js proxy documented by the OpenClaw project. That work demonstrated the core idea — wrapping the Claude Code CLI as a local API server to unlock Max subscription access for third-party clients. This Rust rewrite builds on that foundation with native Anthropic API support and a leaner runtime.
+
+## Comparison with Node.js Version
 
 | | Node.js | Rust |
 |---|---------|------|
