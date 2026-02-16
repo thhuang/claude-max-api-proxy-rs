@@ -26,7 +26,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
+    // Initialize tracing with compact format
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -34,6 +34,7 @@ async fn main() {
         )
         .with_target(false)
         .with_writer(std::io::stderr)
+        .compact()
         .init();
 
     let args = Args::parse();
@@ -84,19 +85,8 @@ async fn main() {
         }
     };
 
-    info!("╔══════════════════════════════════════════╗");
-    info!("║     Claude Max API Proxy (Rust)          ║");
-    info!("╠══════════════════════════════════════════╣");
-    info!("║  Listening: http://127.0.0.1:{:<5}       ║", args.port);
-    info!("║  CWD:       {:<29}║", truncate_str(&cwd, 29));
-    info!("╚══════════════════════════════════════════╝");
-    info!("");
-    info!("Endpoints:");
-    info!("  GET  /health              - Health check");
-    info!("  GET  /v1/models           - List models");
-    info!("  POST /v1/chat/completions - Chat completions (OpenAI)");
-    info!("  POST /v1/messages         - Messages (Anthropic)");
-    info!("");
+    info!("claude-max-proxy listening on http://127.0.0.1:{} (cwd: {})", args.port, cwd);
+    info!("endpoints: GET /health, /v1/models | POST /v1/chat/completions (OpenAI), /v1/messages (Anthropic)");
 
     // Graceful shutdown on SIGINT/SIGTERM
     let shutdown = async {
@@ -127,12 +117,4 @@ async fn main() {
         });
 
     info!("Server stopped.");
-}
-
-fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("...{}", &s[s.len() - (max_len - 3)..])
-    }
 }

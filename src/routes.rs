@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 use std::convert::Infallible;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info};
@@ -25,7 +25,7 @@ fn generate_request_id() -> String {
         .to_string()
         .replace('-', "")
         .chars()
-        .take(24)
+        .take(8)
         .collect()
 }
 
@@ -98,22 +98,32 @@ pub async fn chat_completions(
     let (model, prompt, session_id) = openai_to_cli::openai_to_cli(&request);
 
     info!(
-        request_id = %request_id,
+        req = %request_id,
         model = %model,
         streaming = %is_streaming,
-        "Processing chat completion request"
+        api = "openai",
+        "request"
     );
 
     let options = SubprocessOptions {
+        request_id: request_id.clone(),
         model: model.to_string(),
         session_id,
         cwd: state.cwd.clone(),
     };
 
     if is_streaming {
+        // Streaming: SSE response is returned immediately; subprocess lifecycle is logged separately
         handle_streaming(request_id, prompt, options).await
     } else {
-        handle_non_streaming(request_id, prompt, options).await
+        let start = Instant::now();
+        let result = handle_non_streaming(request_id.clone(), prompt, options).await;
+        let elapsed = start.elapsed().as_secs_f64();
+        match &result {
+            Ok(_) => info!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "openai", "request complete"),
+            Err(e) => error!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "openai", error = %e, "request failed"),
+        }
+        result
     }
 }
 
@@ -301,13 +311,15 @@ pub async fn messages(
     let (model, prompt, session_id) = anthropic_to_cli::anthropic_to_cli(&request);
 
     info!(
-        request_id = %request_id,
+        req = %request_id,
         model = %model,
         streaming = %is_streaming,
-        "Processing Anthropic messages request"
+        api = "anthropic",
+        "request"
     );
 
     let options = SubprocessOptions {
+        request_id: request_id.clone(),
         model: model.to_string(),
         session_id,
         cwd: state.cwd.clone(),
@@ -316,7 +328,14 @@ pub async fn messages(
     if is_streaming {
         handle_messages_streaming(request_id, prompt, options).await
     } else {
-        handle_messages_non_streaming(request_id, prompt, options).await
+        let start = Instant::now();
+        let result = handle_messages_non_streaming(request_id.clone(), prompt, options).await;
+        let elapsed = start.elapsed().as_secs_f64();
+        match &result {
+            Ok(_) => info!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "anthropic", "request complete"),
+            Err(e) => error!(req = %request_id, duration_s = format!("{:.2}", elapsed), api = "anthropic", error = %e, "request failed"),
+        }
+        result
     }
 }
 

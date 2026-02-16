@@ -23,6 +23,7 @@ pub enum SubprocessEvent {
 }
 
 pub struct SubprocessOptions {
+    pub request_id: String,
     pub model: String,
     pub session_id: Option<String>,
     pub cwd: String,
@@ -62,11 +63,9 @@ pub async fn spawn_subprocess(
 ) {
     let args = build_args(&prompt, &options);
     let start = Instant::now();
+    let rid = &options.request_id;
 
-    info!(
-        "Spawning claude subprocess with model={}, cwd={}",
-        options.model, options.cwd
-    );
+    info!(req = %rid, model = %options.model, "spawning subprocess");
 
     let mut child = match Command::new("claude")
         .args(&args)
@@ -85,13 +84,14 @@ pub async fn spawn_subprocess(
             } else {
                 format!("Failed to spawn claude: {}", e)
             };
+            error!(req = %rid, error = %msg, "spawn failed");
             let _ = tx.send(SubprocessEvent::Error(msg)).await;
             return;
         }
     };
 
     let pid = child.id().unwrap_or(0);
-    info!("Claude subprocess started with PID {}", pid);
+    info!(req = %rid, pid = pid, "subprocess started");
 
     let stdout = child.stdout.take().expect("stdout not captured");
     let stderr = child.stderr.take().expect("stderr not captured");
@@ -119,21 +119,21 @@ pub async fn spawn_subprocess(
                                 for event in events {
                                     if first_token {
                                         if matches!(&event, SubprocessEvent::ContentDelta(_)) {
-                                            let elapsed = start.elapsed();
-                                            info!("First token after {:.2}s", elapsed.as_secs_f64());
+                                            let ttft = start.elapsed().as_secs_f64();
+                                            info!(req = %rid, pid = pid, ttft_s = format!("{:.2}", ttft), "first token");
                                             first_token = false;
                                         }
                                     }
                                     if tx.send(event).await.is_err() {
-                                        // Receiver dropped (client disconnected)
-                                        info!("Client disconnected, killing subprocess PID {}", pid);
+                                        let elapsed = start.elapsed().as_secs_f64();
+                                        warn!(req = %rid, pid = pid, duration_s = format!("{:.2}", elapsed), "client disconnected, killing subprocess");
                                         let _ = child.kill().await;
                                         return;
                                     }
                                 }
                             }
                             None => {
-                                debug!("Ignoring non-JSON line: {}", line);
+                                debug!(req = %rid, pid = pid, line = %line, "ignoring non-JSON line");
                             }
                         }
                     }
@@ -152,18 +152,19 @@ pub async fn spawn_subprocess(
                     Ok(Some(line)) => {
                         // Reset inactivity timer on stderr too
                         inactivity_timeout.as_mut().reset(tokio::time::Instant::now() + INACTIVITY_TIMEOUT);
-                        debug!("claude stderr: {}", line);
+                        debug!(req = %rid, pid = pid, "stderr: {}", line);
                     }
                     Ok(None) => {
                         // stderr closed
                     }
                     Err(e) => {
-                        debug!("Error reading stderr: {}", e);
+                        debug!(req = %rid, pid = pid, error = %e, "stderr read error");
                     }
                 }
             }
             () = &mut inactivity_timeout => {
-                warn!("Inactivity timeout after 30 minutes, killing subprocess PID {}", pid);
+                let elapsed = start.elapsed().as_secs_f64();
+                warn!(req = %rid, pid = pid, duration_s = format!("{:.2}", elapsed), "inactivity timeout (30m), killing subprocess");
                 let _ = tx.send(SubprocessEvent::Error("Inactivity timeout after 30 minutes".to_string())).await;
                 let _ = child.kill().await;
                 return;
@@ -175,18 +176,13 @@ pub async fn spawn_subprocess(
     let exit_code = match child.wait().await {
         Ok(status) => status.code().unwrap_or(-1),
         Err(e) => {
-            error!("Error waiting for subprocess: {}", e);
+            error!(req = %rid, pid = pid, error = %e, "error waiting for subprocess");
             -1
         }
     };
 
-    let elapsed = start.elapsed();
-    info!(
-        "Claude subprocess PID {} exited with code {} after {:.2}s",
-        pid,
-        exit_code,
-        elapsed.as_secs_f64()
-    );
+    let elapsed = start.elapsed().as_secs_f64();
+    info!(req = %rid, pid = pid, exit_code = exit_code, duration_s = format!("{:.2}", elapsed), "subprocess exited");
 
     let _ = tx.send(SubprocessEvent::Close(exit_code)).await;
 }
