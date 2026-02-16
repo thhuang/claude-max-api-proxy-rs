@@ -104,6 +104,7 @@ pub async fn chat_completions(
         model: model.to_string(),
         session_id,
         cwd: state.cwd.clone(),
+        api: "openai",
     };
 
     if is_streaming {
@@ -310,6 +311,7 @@ pub async fn messages(
         model: model.to_string(),
         session_id,
         cwd: state.cwd.clone(),
+        api: "anthropic",
     };
 
     if is_streaming {

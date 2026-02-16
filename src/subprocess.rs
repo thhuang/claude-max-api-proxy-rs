@@ -27,6 +27,7 @@ pub struct SubprocessOptions {
     pub model: String,
     pub session_id: Option<String>,
     pub cwd: String,
+    pub api: &'static str, // "openai" or "anthropic"
 }
 
 fn build_args(prompt: &str, options: &SubprocessOptions) -> Vec<String> {
@@ -64,8 +65,10 @@ pub async fn spawn_subprocess(
     let args = build_args(&prompt, &options);
     let start = Instant::now();
     let rid = &options.request_id;
+    let api = options.api;
+    let mut ttft_secs: Option<f64> = None;
 
-    info!("[req={rid}] Spawning subprocess model={}", options.model);
+    info!("[req={rid}] Spawning subprocess model={} api={api}", options.model);
 
     let mut child = match Command::new("claude")
         .args(&args)
@@ -120,13 +123,18 @@ pub async fn spawn_subprocess(
                                     if first_token {
                                         if matches!(&event, SubprocessEvent::ContentDelta(_)) {
                                             let ttft = start.elapsed().as_secs_f64();
+                                            ttft_secs = Some(ttft);
                                             info!("[req={rid}][pid={pid}] First token after {ttft:.2}s");
                                             first_token = false;
                                         }
                                     }
                                     if tx.send(event).await.is_err() {
                                         let elapsed = start.elapsed().as_secs_f64();
-                                        warn!("[req={rid}][pid={pid}] Client disconnected after {elapsed:.2}s, killing subprocess");
+                                        let ttft_str = match ttft_secs {
+                                            Some(t) => format!("{t:.2}s"),
+                                            None => "-".to_string(),
+                                        };
+                                        warn!("[req={rid}][pid={pid}] Disconnected api={api} model={} ttft={ttft_str} total={elapsed:.2}s", options.model);
                                         let _ = child.kill().await;
                                         return;
                                     }
@@ -164,7 +172,11 @@ pub async fn spawn_subprocess(
             }
             () = &mut inactivity_timeout => {
                 let elapsed = start.elapsed().as_secs_f64();
-                warn!("[req={rid}][pid={pid}] Inactivity timeout (30m) after {elapsed:.2}s, killing subprocess");
+                let ttft_str = match ttft_secs {
+                    Some(t) => format!("{t:.2}s"),
+                    None => "-".to_string(),
+                };
+                warn!("[req={rid}][pid={pid}] Timeout api={api} model={} ttft={ttft_str} total={elapsed:.2}s (30m inactivity)", options.model);
                 let _ = tx.send(SubprocessEvent::Error("Inactivity timeout after 30 minutes".to_string())).await;
                 let _ = child.kill().await;
                 return;
@@ -182,7 +194,14 @@ pub async fn spawn_subprocess(
     };
 
     let elapsed = start.elapsed().as_secs_f64();
-    info!("[req={rid}][pid={pid}] Subprocess exited code={exit_code} after {elapsed:.2}s");
+    let ttft_str = match ttft_secs {
+        Some(t) => format!("{t:.2}s"),
+        None => "-".to_string(),
+    };
+    info!(
+        "[req={rid}][pid={pid}] Done api={api} model={} ttft={ttft_str} total={elapsed:.2}s exit={exit_code}",
+        options.model
+    );
 
     let _ = tx.send(SubprocessEvent::Close(exit_code)).await;
 }
