@@ -103,6 +103,7 @@ pub async fn spawn_subprocess(
     let mut stderr_reader = BufReader::new(stderr).lines();
     let mut first_token = true;
     let mut chunk_count: u64 = 0;
+    let mut line_count: u64 = 0;
     let inactivity_timeout = tokio::time::sleep(INACTIVITY_TIMEOUT);
     tokio::pin!(inactivity_timeout);
     let progress_interval = tokio::time::sleep(Duration::from_secs(30));
@@ -120,6 +121,7 @@ pub async fn spawn_subprocess(
                             continue;
                         }
 
+                        line_count += 1;
                         match process_line(&line) {
                             Some(events) => {
                                 for event in events {
@@ -178,7 +180,7 @@ pub async fn spawn_subprocess(
             }
             () = &mut progress_interval => {
                 let elapsed = start.elapsed().as_secs_f64();
-                info!("[req={rid}][pid={pid}] Still running {elapsed:.0}s chunks={chunk_count}");
+                info!("[req={rid}][pid={pid}] Still running {elapsed:.0}s lines={line_count} chunks={chunk_count}");
                 progress_interval.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(30));
             }
             () = &mut inactivity_timeout => {

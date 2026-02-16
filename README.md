@@ -1,5 +1,7 @@
 # claude-max-api-proxy-rs
 
+[![CI](https://github.com/thhuang/claude-max-api-proxy-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/thhuang/claude-max-api-proxy-rs/actions/workflows/ci.yml)
+
 **Use your Claude Max subscription with any OpenAI or Anthropic-compatible client — no separate API costs.**
 
 A fast Rust proxy that wraps the [Claude Code CLI](https://github.com/anthropics/claude-code) as a subprocess and exposes both **OpenAI** and **Anthropic** HTTP APIs. Any tool that speaks either protocol can now use your Max subscription directly.
