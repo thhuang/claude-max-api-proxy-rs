@@ -26,6 +26,7 @@ pub struct SubprocessOptions {
     pub request_id: String,
     pub model: String,
     pub session_id: Option<String>,
+    pub system_prompt: Option<String>,
     pub cwd: String,
     pub api: &'static str, // "openai" or "anthropic"
 }
@@ -46,6 +47,13 @@ fn build_args(options: &SubprocessOptions) -> Vec<String> {
     if let Some(ref session_id) = options.session_id {
         args.push("--session-id".to_string());
         args.push(session_id.clone());
+    }
+
+    if let Some(ref system_prompt) = options.system_prompt {
+        if !system_prompt.is_empty() {
+            args.push("--append-system-prompt".to_string());
+            args.push(system_prompt.clone());
+        }
     }
 
     args
@@ -310,11 +318,13 @@ mod tests {
             request_id: "abc".to_string(),
             model: "opus".to_string(),
             session_id: None,
+            system_prompt: None,
             cwd: "/tmp".to_string(),
             api: "anthropic",
         };
         let args = build_args(&options);
         assert!(args.contains(&"--print".to_string()));
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--model".to_string()));
@@ -329,12 +339,42 @@ mod tests {
             request_id: "abc".to_string(),
             model: "sonnet".to_string(),
             session_id: Some("sess-123".to_string()),
+            system_prompt: None,
             cwd: "/tmp".to_string(),
             api: "openai",
         };
         let args = build_args(&options);
         assert!(args.contains(&"--session-id".to_string()));
         assert!(args.contains(&"sess-123".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_system_prompt() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "sonnet".to_string(),
+            session_id: None,
+            system_prompt: Some("You are Hermes.".to_string()),
+            cwd: "/tmp".to_string(),
+            api: "openai",
+        };
+        let args = build_args(&options);
+        assert!(args.contains(&"--append-system-prompt".to_string()));
+        assert!(args.contains(&"You are Hermes.".to_string()));
+    }
+
+    #[test]
+    fn build_args_empty_system_prompt_omitted() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "sonnet".to_string(),
+            session_id: None,
+            system_prompt: Some(String::new()),
+            cwd: "/tmp".to_string(),
+            api: "openai",
+        };
+        let args = build_args(&options);
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
     }
 
     // ── process_line ──────────────────────────────────────────

@@ -95,7 +95,7 @@ pub async fn chat_completions(
     let request_id = generate_request_id();
     let is_streaming = request.stream;
 
-    let (model, prompt, session_id) = openai_to_cli::openai_to_cli(&request);
+    let (model, system_prompt, prompt, session_id) = openai_to_cli::openai_to_cli(&request);
 
     info!("[req={request_id}] OpenAI chat completions model={model} streaming={is_streaming}");
 
@@ -103,6 +103,7 @@ pub async fn chat_completions(
         request_id: request_id.clone(),
         model: model.to_string(),
         session_id,
+        system_prompt,
         cwd: state.cwd.clone(),
         api: "openai",
     };
@@ -302,7 +303,7 @@ pub async fn messages(
     let request_id = generate_request_id();
     let is_streaming = request.stream;
 
-    let (model, prompt, session_id) = anthropic_to_cli::anthropic_to_cli(&request);
+    let (model, system_prompt, prompt, session_id) = anthropic_to_cli::anthropic_to_cli(&request);
 
     info!("[req={request_id}] Anthropic messages model={model} streaming={is_streaming}");
 
@@ -310,6 +311,7 @@ pub async fn messages(
         request_id: request_id.clone(),
         model: model.to_string(),
         session_id,
+        system_prompt,
         cwd: state.cwd.clone(),
         api: "anthropic",
     };
