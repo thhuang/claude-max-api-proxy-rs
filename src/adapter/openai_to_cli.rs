@@ -60,19 +60,24 @@ fn extract_text(content: &Option<MessageContent>) -> String {
     }
 }
 
-/// Convert OpenAI messages to a CLI prompt string.
+/// Convert OpenAI messages to a system prompt and a CLI prompt string.
 ///
-/// - System messages are wrapped in `<system>` tags
+/// - System messages are collected separately and passed to the CLI via
+///   `--append-system-prompt` (inlining them in the user prompt reads as
+///   fake-system-prompt injection to the model)
 /// - User messages are included as bare text
 /// - Assistant messages are wrapped in `<previous_response>` tags
-pub fn messages_to_prompt(messages: &[Message]) -> String {
+pub fn messages_to_prompt(messages: &[Message]) -> (Option<String>, String) {
+    let mut system_parts: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
 
     for msg in messages {
         let text = extract_text(&msg.content);
         match msg.role.as_str() {
             "system" => {
-                parts.push(format!("<system>\n{}\n</system>\n", text));
+                if !text.is_empty() {
+                    system_parts.push(text);
+                }
             }
             "user" => {
                 parts.push(text);
@@ -87,19 +92,27 @@ pub fn messages_to_prompt(messages: &[Message]) -> String {
         }
     }
 
-    parts.join("\n").trim().to_string()
+    let system = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+
+    (system, parts.join("\n").trim().to_string())
 }
 
 /// Convert an OpenAI request to CLI arguments and prompt.
-/// Returns (model_alias, prompt, optional_session_id).
-pub fn openai_to_cli(request: &ChatCompletionRequest) -> (&'static str, String, Option<String>) {
+/// Returns (model_alias, optional_system_prompt, prompt, optional_session_id).
+pub fn openai_to_cli(
+    request: &ChatCompletionRequest,
+) -> (&'static str, Option<String>, String, Option<String>) {
     let model = request
         .model
         .as_deref()
         .map(extract_model)
         .unwrap_or("opus");
 
-    let prompt = request
+    let (system, prompt) = request
         .messages
         .as_ref()
         .map(|msgs| messages_to_prompt(msgs))
@@ -107,7 +120,7 @@ pub fn openai_to_cli(request: &ChatCompletionRequest) -> (&'static str, String, 
 
     let session_id = request.user.clone();
 
-    (model, prompt, session_id)
+    (model, system, prompt, session_id)
 }
 
 #[cfg(test)]
@@ -160,11 +173,11 @@ mod tests {
             role: "user".to_string(),
             content: Some(MessageContent::Text("Hello".to_string())),
         }];
-        assert_eq!(messages_to_prompt(&messages), "Hello");
+        assert_eq!(messages_to_prompt(&messages), (None, "Hello".to_string()));
     }
 
     #[test]
-    fn system_message_wrapped_in_tags() {
+    fn system_message_extracted_separately() {
         let messages = vec![
             Message {
                 role: "system".to_string(),
@@ -175,9 +188,10 @@ mod tests {
                 content: Some(MessageContent::Text("Hi".to_string())),
             },
         ];
-        let prompt = messages_to_prompt(&messages);
-        assert!(prompt.starts_with("<system>\nYou are helpful.\n</system>"));
-        assert!(prompt.contains("Hi"));
+        let (system, prompt) = messages_to_prompt(&messages);
+        assert_eq!(system, Some("You are helpful.".to_string()));
+        assert!(!prompt.contains("<system>"));
+        assert_eq!(prompt, "Hi");
     }
 
     #[test]
@@ -196,7 +210,8 @@ mod tests {
                 content: Some(MessageContent::Text("How are you?".to_string())),
             },
         ];
-        let prompt = messages_to_prompt(&messages);
+        let (system, prompt) = messages_to_prompt(&messages);
+        assert_eq!(system, None);
         assert!(prompt.contains("<previous_response>\nHello!\n</previous_response>"));
         assert!(prompt.contains("How are you?"));
     }
@@ -220,7 +235,7 @@ mod tests {
                 },
             ])),
         }];
-        assert_eq!(messages_to_prompt(&messages), "Hello world");
+        assert_eq!(messages_to_prompt(&messages), (None, "Hello world".to_string()));
     }
 
     #[test]
@@ -229,7 +244,7 @@ mod tests {
             role: "user".to_string(),
             content: None,
         }];
-        assert_eq!(messages_to_prompt(&messages), "");
+        assert_eq!(messages_to_prompt(&messages), (None, "".to_string()));
     }
 
     #[test]
@@ -238,7 +253,7 @@ mod tests {
             role: "tool".to_string(),
             content: Some(MessageContent::Text("tool output".to_string())),
         }];
-        assert_eq!(messages_to_prompt(&messages), "tool output");
+        assert_eq!(messages_to_prompt(&messages), (None, "tool output".to_string()));
     }
 
     // ── openai_to_cli ────────────────────────────────────────
@@ -254,8 +269,9 @@ mod tests {
             stream: false,
             user: Some("session-123".to_string()),
         };
-        let (model, prompt, session_id) = openai_to_cli(&request);
+        let (model, system, prompt, session_id) = openai_to_cli(&request);
         assert_eq!(model, "sonnet");
+        assert_eq!(system, None);
         assert_eq!(prompt, "test");
         assert_eq!(session_id, Some("session-123".to_string()));
     }
@@ -271,7 +287,7 @@ mod tests {
             stream: false,
             user: None,
         };
-        let (model, _, session_id) = openai_to_cli(&request);
+        let (model, _, _, session_id) = openai_to_cli(&request);
         assert_eq!(model, "opus");
         assert_eq!(session_id, None);
     }
@@ -284,7 +300,7 @@ mod tests {
             stream: false,
             user: None,
         };
-        let (_, prompt, _) = openai_to_cli(&request);
+        let (_, _, prompt, _) = openai_to_cli(&request);
         assert_eq!(prompt, "");
     }
 }
